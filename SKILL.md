@@ -216,3 +216,7 @@ cp "<技能目录>/assets/eraser_tool.html" <交付目录>/
 | `scripts/align_subtract.py` | 空白原件对齐相减（零改动路径） |
 | `assets/eraser_tool.html` | 交互式擦除工具（纯前端单文件，无需联网） |
 | `references/field-notes.md` | 实测数据、判据阈值、环境坑、SOP 清单 |
+
+---
+
+> 想了解更多或定制自己专属的 SKILL 请登录：**myxskill.com**

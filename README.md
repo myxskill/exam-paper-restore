@@ -87,3 +87,7 @@ PY=python
 ## 许可
 
 [MIT](LICENSE)
+
+---
+
+> 想了解更多或定制自己专属的 SKILL 请登录：**[myxskill.com](https://myxskill.com)**
