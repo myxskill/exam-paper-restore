@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>试卷手写擦除工具</title>
+<style>
+  :root{ --bg:#f5f6f8; --panel:#fff; --line:#e2e5ea; --txt:#222; --sub:#6b7280;
+         --brand:#2f6feb; --brand2:#1f57c3; --danger:#e5484d; --ok:#12a150; }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;font-family:"Microsoft YaHei","PingFang SC",system-ui,sans-serif;
+            background:var(--bg);color:var(--txt)}
+  #app{display:flex;flex-direction:column;height:100%}
+  header{display:flex;align-items:center;gap:14px;padding:10px 16px;background:var(--panel);
+         border-bottom:1px solid var(--line);flex-wrap:wrap}
+  h1{font-size:15px;margin:0;font-weight:600;letter-spacing:.3px}
+  h1 span{color:var(--sub);font-weight:400;font-size:12px;margin-left:8px}
+  .grp{display:flex;align-items:center;gap:8px;padding-left:14px;border-left:1px solid var(--line)}
+  .grp:first-of-type{border-left:none;padding-left:0}
+  label.lb{font-size:12px;color:var(--sub)}
+  button{font:inherit;font-size:13px;padding:6px 12px;border-radius:7px;border:1px solid var(--line);
+         background:#fff;color:var(--txt);cursor:pointer;transition:.15s}
+  button:hover{border-color:#c9ced6;background:#fafbfc}
+  button.on{background:var(--brand);border-color:var(--brand);color:#fff}
+  button.primary{background:var(--brand);border-color:var(--brand);color:#fff}
+  button.primary:hover{background:var(--brand2)}
+  button.ghost{color:var(--sub)}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  input[type=range]{width:110px}
+  #file{display:none}
+  main{flex:1;position:relative;overflow:hidden;background:#e9ebef}
+  #stage{position:absolute;inset:0;overflow:hidden;cursor:crosshair}
+  #stage.pan{cursor:grab}
+  #stage.panning{cursor:grabbing}
+  canvas{position:absolute;transform-origin:0 0;image-rendering:auto}
+  #view{box-shadow:0 2px 18px rgba(0,0,0,.18);background:#fff}
+  #drop{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;
+        gap:14px;color:var(--sub);font-size:14px;text-align:center;padding:24px}
+  #drop b{color:var(--txt);font-size:17px;font-weight:600}
+  #drop .k{background:#fff;border:1px dashed #c3c9d2;border-radius:12px;padding:26px 34px;line-height:1.9}
+  footer{display:flex;align-items:center;gap:16px;padding:7px 16px;background:var(--panel);
+         border-top:1px solid var(--line);font-size:12px;color:var(--sub);flex-wrap:wrap}
+  .stat b{color:var(--txt);font-weight:600}
+  .tag{display:inline-block;padding:1px 7px;border-radius:99px;background:#eef2ff;color:#3b5bdb;font-size:11px;margin-left:6px}
+  #busy{position:absolute;inset:0;background:rgba(255,255,255,.82);display:none;align-items:center;
+        justify-content:center;flex-direction:column;gap:10px;z-index:20;font-size:14px;color:var(--sub)}
+  #busy .sp{width:34px;height:34px;border:3px solid #d7dbe2;border-top-color:var(--brand);
+            border-radius:50%;animation:sp .8s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  kbd{background:#f2f4f7;border:1px solid #dfe3e9;border-bottom-width:2px;border-radius:4px;
+      padding:0 5px;font-family:inherit;font-size:11px}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>试卷手写擦除工具<span>载入去红笔底图 → 点选/涂抹擦掉手写</span></h1>
+
+    <div class="grp">
+      <button id="btnOpen" class="primary">打开试卷图</button>
+      <input type="file" id="file" accept="image/*">
+    </div>
+
+    <div class="grp">
+      <button id="mBrush" class="on">刷子</button>
+      <button id="mComp">点选笔画</button>
+      <button id="mUndoMask">减选</button>
+    </div>
+
+    <div class="grp">
+      <label class="lb">笔刷</label>
+      <input type="range" id="brush" min="4" max="160" value="34">
+      <span class="stat" id="brushVal">34</span>
+    </div>
+
+    <div class="grp">
+      <label class="lb">深度阈值</label>
+      <input type="range" id="thr" min="60" max="200" value="152">
+      <span class="stat" id="thrVal">152</span>
+    </div>
+
+    <div class="grp">
+      <button id="btnErase" class="primary" disabled>执行擦除</button>
+      <button id="btnUndo" disabled>撤销</button>
+      <button id="btnClear" class="ghost">清空选区</button>
+      <button id="btnSave" disabled>导出 PNG</button>
+    </div>
+  </header>
+
+  <main>
+    <div id="stage">
+      <canvas id="view"></canvas>
+      <div id="drop">
+        <b>还没有载入试卷</b>
+        <div class="k">
+          点左上角「打开试卷图」选择图片<br>
+          建议先载入<b>已去除红笔批改</b>的底图（remove_red.py 的产物）<br>
+          <span style="font-size:12px">也可以直接把图片拖到这里</span>
+        </div>
+      </div>
+    </div>
+    <div id="busy"><div class="sp"></div><div id="busyTxt">处理中…</div></div>
+  </main>
+
+  <footer>
+    <span>滚轮缩放 · 按住 <kbd>空格</kbd> 或中键拖动平移 · <kbd>Ctrl</kbd>+<kbd>Z</kbd> 撤销</span>
+    <span class="stat" id="tip">刷子:涂住要擦掉的笔迹 → 执行擦除</span>
+    <span class="stat" id="zoomTxt"></span>
+  </footer>
+</div>
+
+<script>
+"use strict";
+/* ========= 状态 ========= */
+const S = {
+  W: 0, H: 0,            // 原图尺寸
+  scale: 1, tx: 0, ty: 0,// 视图缩放/平移
+  mode: "brush",
+  brush: 34, thr: 152,
+  loaded: false,
+  history: [],           // 图像历史(ImageData 的副本 + 掩膜不做历史,只做图像)
+};
+const full   = document.createElement("canvas");   // 原尺寸工作图
+const fctx   = full.getContext("2d", { willReadFrequently: true });
+const ovl    = document.createElement("canvas");   // 原尺寸选区层(红色)
+const octx   = ovl.getContext("2d", { willReadFrequently: true });
+
+const view = document.getElementById("view");
+const vctx = view.getContext("2d");
+const stage = document.getElementById("stage");
+const drop = document.getElementById("drop");
+const busy = document.getElementById("busy");
+const busyTxt = document.getElementById("busyTxt");
+
+const $ = id => document.getElementById(id);
+
+/* ========= 载入 ========= */
+function loadImage(src) {
+  const img = new Image();
+  img.onload = () => {
+    S.W = img.naturalWidth; S.H = img.naturalHeight;
+    [full, ovl].forEach(c => { c.width = S.W; c.height = S.H; });
+    full.width = S.W; full.height = S.H;
+    ovl.width = S.W; ovl.height = S.H;
+    fctx.clearRect(0, 0, S.W, S.H);
+    fctx.drawImage(img, 0, 0);
+    octx.clearRect(0, 0, S.W, S.H);
+    S.loaded = true; S.history = [];
+    drop.style.display = "none";
+    view.width = S.W; view.height = S.H;
+    zoomFit();
+    render();
+    $("btnErase").disabled = false;
+    $("btnSave").disabled = false;
+    updateUndo();
+  };
+  img.onerror = () => alert("图片加载失败,请换一张。");
+  img.src = src;
+}
+
+function zoomFit() {
+  const r = stage.getBoundingClientRect();
+  const k = Math.min(r.width / S.W, r.height / S.H) * 0.98;
+  S.scale = k;
+  S.tx = (r.width - S.W * k) / 2;
+  S.ty = (r.height - S.H * k) / 2;
+}
+
+/* ========= 渲染 ========= */
+function render() {
+  const r = stage.getBoundingClientRect();
+  if (view.width !== r.width || view.height !== r.height) {
+    view.width = Math.max(1, r.width); view.height = Math.max(1, r.height);
+  }
+  vctx.setTransform(1, 0, 0, 1, 0, 0);
+  vctx.clearRect(0, 0, view.width, view.height);
+  vctx.imageSmoothingQuality = "high";
+  // 纸张阴影
+  vctx.save();
+  vctx.shadowColor = "rgba(0,0,0,.18)"; vctx.shadowBlur = 16;
+  vctx.fillStyle = "#fff";
+  vctx.fillRect(S.tx, S.ty, S.W * S.scale, S.H * S.scale);
+  vctx.restore();
+  vctx.drawImage(full, S.tx, S.ty, S.W * S.scale, S.H * S.scale);
+  vctx.globalAlpha = .55;
+  vctx.drawImage(ovl, S.tx, S.ty, S.W * S.scale, S.H * S.scale);
+  vctx.globalAlpha = 1;
+  $("zoomTxt").textContent = "缩放 " + Math.round(S.scale * 100) + "%";
+}
+
+/* ========= 坐标 ========= */
+function toImg(ev) {
+  const r = stage.getBoundingClientRect();
+  return { x: (ev.clientX - r.left - S.tx) / S.scale,
+           y: (ev.clientY - r.top  - S.ty) / S.scale };
+}
+
+/* ========= 笔刷 ========= */
+let painting = false, lastPt = null, panning = false, spaceDown = false;
+
+function strokeDot(x, y, radius, erase) {
+  octx.save();
+  octx.globalCompositeOperation = erase ? "destination-out" : "source-over";
+  octx.fillStyle = "#e5484d";
+  octx.beginPath();
+  octx.arc(x, y, radius, 0, Math.PI * 2);
+  octx.fill();
+  octx.restore();
+}
+function strokeSeg(a, b, radius, erase) {
+  octx.save();
+  octx.globalCompositeOperation = erase ? "destination-out" : "source-over";
+  octx.strokeStyle = "#e5484d"; octx.lineCap = "round"; octx.lineJoin = "round";
+  octx.lineWidth = radius * 2;
+  octx.beginPath(); octx.moveTo(a.x, a.y); octx.lineTo(b.x, b.y); octx.stroke();
+  octx.restore();
+}
+
+/* ========= 点选笔画:连通域 ========= */
+function pickComponent(px, py, erase) {
+  const W = S.W, H = S.H;
+  const id = fctx.getImageData(0, 0, W, H);
+  const d = id.data;
+  const thr = S.thr;
+  const at = (x, y) => (y * W + x) * 4;
+  if (px < 0 || py < 0 || px >= W || py >= H) return;
+
+  const start = at(px | 0, py | 0);
+  const lum = i => (d[i] * 299 + d[i + 1] * 587 + d[i + 2] * 114) / 1000;
+  if (lum(start) >= thr) { // 点到了纸面,忽略
+    flashTip("这里不是笔迹(亮度 " + Math.round(lum(start)) + "),换个位置点。");
+    return;
+  }
+  const visited = new Uint8Array(W * H);
+  const q = new Int32Array(W * H);
+  let qh = 0, qt = 0;
+  const s = (py | 0) * W + (px | 0);
+  q[qt++] = s; visited[s] = 1;
+
+  const tmp = document.createElement("canvas"); tmp.width = W; tmp.height = H;
+  const tctx = tmp.getContext("2d");
+  const timg = tctx.createImageData(W, H);
+  const td = timg.data;
+  let n = 0;
+
+  // 容差:与该连通域起始亮度相差 42 以内
+  const base = lum(start);
+  const lo = Math.max(0, base - 34), hi = Math.min(255, base + 30);
+
+  while (qh < qt) {
+    const p = q[qh++]; n++;
+    const i = p * 4;
+    td[i] = 229; td[i + 1] = 72; td[i + 2] = 77; td[i + 3] = 255;
+    const x = p % W, y = (p / W) | 0;
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (!dx && !dy) continue;
+        const nx = x + dx, ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+        const np = ny * W + nx;
+        if (visited[np]) continue;
+        const l = lum(np * 4);
+        if (l < thr && l >= lo && l <= hi) { visited[np] = 1; q[qt++] = np; }
+      }
+    }
+    if (n > 400000) break;  // 安全阀
+  }
+  tctx.putImageData(timg, 0, 0);
+  // 轻微外扩, 让边缘也被覆盖
+  octx.save();
+  octx.globalCompositeOperation = erase ? "destination-out" : "source-over";
+  if (!erase) {
+    octx.filter = "blur(1.2px)";
+    octx.drawImage(tmp, 0, 0);
+    octx.filter = "none";
+    octx.drawImage(tmp, 0, 0);
+  } else {
+    octx.filter = "blur(1.2px)";
+    octx.drawImage(tmp, 0, 0);
+    octx.filter = "none";
+    octx.drawImage(tmp, 0, 0);
+  }
+  octx.restore();
+  flashTip(erase ? "已减选 " + n + " px" : "已选中 " + n + " px(连通笔画)");
+  render();
+}
+
+/* ========= 擦除(修复填充) ========= */
+function doErase() {
+  if (!S.loaded) return;
+  pushHistory();
+  showBusy("正在修复填充…");
+  setTimeout(() => {
+    const W = S.W, H = S.H;
+    const img = fctx.getImageData(0, 0, W, H);
+    const d = img.data;
+    const od = octx.getImageData(0, 0, W, H).data;
+
+    // 掩膜 = 选区 alpha 阈值 + 轻微膨胀
+    let mask = new Uint8Array(W * H);
+    let any = 0;
+    for (let i = 0, p = 0; p < W * H; p++, i += 4) {
+      if (od[i + 3] > 60) { mask[p] = 1; any++; }
+    }
+    if (!any) { hideBusy(); flashTip("选区是空的,先涂一下笔迹。"); return; }
+
+    // 膨胀 2 圈
+    let cur = mask;
+    for (let k = 0; k < 2; k++) {
+      const nx = new Uint8Array(W * H);
+      for (let y = 0; y < H; y++) {
+        const row = y * W;
+        for (let x = 0; x < W; x++) {
+          if (cur[row + x]) { nx[row + x] = 1; continue; }
+          if ((x > 0 && cur[row + x - 1]) || (x < W - 1 && cur[row + x + 1]) ||
+              (y > 0 && cur[row + x - W]) || (y < H - 1 && cur[row + x + W])) nx[row + x] = 1;
+        }
+      }
+      cur = nx;
+    }
+    mask = cur;
+
+    // 多轮扩散填充:每轮让"有有效邻居"的遮挡像素取邻居均值,直到全部填满
+    // (薄笔画 20 轮内收敛,效果等同热扩散,且不会溢出队列)
+    const list = new Int32Array(any);
+    { let k = 0; for (let p = 0; p < W * H; p++) if (mask[p]) list[k++] = p; }
+
+    const valid = new Uint8Array(W * H);
+    for (let p = 0; p < W * H; p++) valid[p] = mask[p] ? 0 : 1;
+
+    const NB = [[-1,0],[1,0],[0,-1],[0,1],[-1,-1],[1,-1],[-1,1],[1,1]];
+    const MAXPASS = 200;
+    let left = any;
+    for (let pass = 0; pass < MAXPASS && left > 0; pass++) {
+      let filled = 0;
+      for (let k = 0; k < list.length; k++) {
+        const p = list[k];
+        if (valid[p]) continue;
+        const x = p % W, y = (p / W) | 0;
+        if (x === 0 || y === 0 || x === W - 1 || y === H - 1) { continue; }
+        let r = 0, g = 0, b = 0, c = 0;
+        for (let m = 0; m < 8; m++) {
+          const np = p + NB[m][0] + NB[m][1] * W;
+          if (!valid[np]) continue;
+          const j = np * 4; r += d[j]; g += d[j + 1]; b += d[j + 2]; c++;
+        }
+        if (c) {
+          const j = p * 4;
+          d[j] = r / c; d[j + 1] = g / c; d[j + 2] = b / c;
+          valid[p] = 1; filled++; left--;
+        }
+      }
+      if (!filled) break;   // 没有可填的了
+    }
+    fctx.putImageData(img, 0, 0);
+    octx.clearRect(0, 0, W, H);
+    render();
+    hideBusy();
+    flashTip("擦除完成。继续涂下一处,或导出。");
+  }, 30);
+}
+
+/* ========= 历史 ========= */
+function pushHistory() {
+  try {
+    const snap = fctx.getImageData(0, 0, S.W, S.H);
+    S.history.push(snap);
+    if (S.history.length > 12) S.history.shift();
+    updateUndo();
+  } catch (e) {}
+}
+function updateUndo() { $("btnUndo").disabled = S.history.length === 0; }
+function undo() {
+  const snap = S.history.pop();
+  if (!snap) return;
+  fctx.putImageData(snap, 0, 0);
+  octx.clearRect(0, 0, S.W, S.H);
+  render(); updateUndo();
+  flashTip("已撤销");
+}
+
+/* ========= 提示 ========= */
+let tipTimer = null;
+function flashTip(t) {
+  const el = $("tip"); el.textContent = t;
+  clearTimeout(tipTimer);
+  tipTimer = setTimeout(() => {
+    el.textContent = S.mode === "brush" ? "刷子:涂住要擦掉的笔迹 → 执行擦除"
+      : S.mode === "comp" ? "点选笔画:点一下自动选中整段连通的笔迹"
+      : "减选:涂掉误选的部分";
+  }, 2600);
+}
+function showBusy(t) { busyTxt.textContent = t; busy.style.display = "flex"; }
+function hideBusy() { busy.style.display = "none"; }
+
+/* ========= 事件 ========= */
+stage.addEventListener("wheel", e => {
+  if (!S.loaded) return;
+  e.preventDefault();
+  const r = stage.getBoundingClientRect();
+  const mx = e.clientX - r.left, my = e.clientY - r.top;
+  const ix = (mx - S.tx) / S.scale, iy = (my - S.ty) / S.scale;
+  const k = Math.exp(-e.deltaY * 0.0016);
+  S.scale = Math.max(0.04, Math.min(8, S.scale * k));
+  S.tx = mx - ix * S.scale; S.ty = my - iy * S.scale;
+  render();
+}, { passive: false });
+
+stage.addEventListener("pointerdown", e => {
+  if (!S.loaded) return;
+  if (e.button === 1 || spaceDown) {
+    panning = true; stage.classList.add("panning");
+    stage.setPointerCapture(e.pointerId);
+    lastPt = { x: e.clientX, y: e.clientY };
+    return;
+  }
+  if (e.button !== 0) return;
+  const p = toImg(e);
+  if (S.mode === "brush" || S.mode === "undomask") {
+    painting = true; stage.setPointerCapture(e.pointerId);
+    const erase = S.mode === "undomask";
+    strokeDot(p.x, p.y, S.brush / 2, erase);
+    lastPt = p; render();
+  } else if (S.mode === "comp") {
+    pickComponent(p.x, p.y, false);
+  }
+});
+
+stage.addEventListener("pointermove", e => {
+  if (panning && lastPt) {
+    S.tx += e.clientX - lastPt.x; S.ty += e.clientY - lastPt.y;
+    lastPt = { x: e.clientX, y: e.clientY };
+    render(); return;
+  }
+  if (painting) {
+    const p = toImg(e);
+    const erase = S.mode === "undomask";
+    if (lastPt) strokeSeg(lastPt, p, S.brush / 2, erase);
+    else strokeDot(p.x, p.y, S.brush / 2, erase);
+    lastPt = p; render();
+  }
+});
+
+function endPointer() {
+  if (painting) { painting = false; lastPt = null; }
+  if (panning) { panning = false; stage.classList.remove("panning"); lastPt = null; }
+}
+stage.addEventListener("pointerup", endPointer);
+stage.addEventListener("pointercancel", endPointer);
+
+window.addEventListener("keydown", e => {
+  if (e.code === "Space") { spaceDown = true; stage.classList.add("pan"); e.preventDefault(); }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") { e.preventDefault(); undo(); }
+});
+window.addEventListener("keyup", e => {
+  if (e.code === "Space") { spaceDown = false; if (!panning) stage.classList.remove("pan"); }
+});
+window.addEventListener("resize", () => render());
+
+/* ========= 控件 ========= */
+$("btnOpen").onclick = () => $("file").click();
+$("file").onchange = e => {
+  const f = e.target.files[0]; if (!f) return;
+  const fr = new FileReader();
+  fr.onload = () => loadImage(fr.result);
+  fr.readAsDataURL(f);
+};
+
+function setMode(m) {
+  S.mode = m;
+  $("mBrush").classList.toggle("on", m === "brush");
+  $("mComp").classList.toggle("on", m === "comp");
+  $("mUndoMask").classList.toggle("on", m === "undomask");
+  flashTip(m === "brush" ? "刷子:涂住要擦掉的笔迹 → 执行擦除"
+    : m === "comp" ? "点选笔画:点一下自动选中整段连通的笔迹"
+    : "减选:涂掉误选的部分");
+}
+$("mBrush").onclick = () => setMode("brush");
+$("mComp").onclick = () => setMode("comp");
+$("mUndoMask").onclick = () => setMode("undomask");
+
+$("brush").oninput = e => { S.brush = +e.target.value; $("brushVal").textContent = S.brush; };
+$("thr").oninput = e => { S.thr = +e.target.value; $("thrVal").textContent = S.thr; };
+
+$("btnErase").onclick = doErase;
+$("btnUndo").onclick = undo;
+$("btnClear").onclick = () => { octx.clearRect(0, 0, S.W, S.H); render(); flashTip("选区已清空"); };
+$("btnSave").onclick = () => {
+  const a = document.createElement("a");
+  a.download = "试卷_已擦除.png";
+  a.href = full.toDataURL("image/png");
+  a.click();
+};
+
+/* 拖放 */
+["dragover", "drop"].forEach(t => stage.addEventListener(t, e => {
+  e.preventDefault();
+  if (t === "drop") {
+    const f = e.dataTransfer.files[0]; if (!f) return;
+    const fr = new FileReader();
+    fr.onload = () => loadImage(fr.result);
+    fr.readAsDataURL(f);
+  }
+}));
+
+/* 初始 */
+render();
+</script>
+</body>
+</html>
